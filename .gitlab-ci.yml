@@ -105,7 +105,7 @@ docker_push:
 
     # Login no Docker Hub
     if [ -z "$DOCKER_USERNAME" ] || [ -z "$DOCKER_PASSWORD" ]; then
-      echo "ERRO: DOCKER_USERNAME ou DOCKER_PASSWORD não definidos!!."
+      echo "ERRO: DOCKER_USERNAME ou DOCKER_PASSWORD não definidos."
       exit 1
     fi
     echo "$DOCKER_PASSWORD" | docker login -u "$DOCKER_USERNAME" --password-stdin
