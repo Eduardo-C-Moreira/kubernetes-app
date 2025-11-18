@@ -1,7 +1,6 @@
 # ==========================================================
 #      CONFIGURAÇÃO GLOBAL — IMAGEM PADRÃO DO PIPELINE
 # ==========================================================
-# A imagem global será usada apenas quando o job não definir a sua.
 image: docker:latest
 
 stages:
@@ -19,15 +18,13 @@ build:
 
   before_script:
     - echo "Java instalado:"
-    - java -version           # confirma versão do Java
+    - java -version
     - echo "Maven instalado:"
-    - mvn -version            # confirma versão do Maven
+    - mvn -version
 
   script:
     - echo "Atualizando versão automaticamente..."
-    # Atualiza a versão no pom.xml para um valor único por pipeline/commit
     - mvn versions:set -DnewVersion=1.0.$CI_PIPELINE_IID-$CI_COMMIT_SHORT_SHA
-    # Limpa e empacota o projeto sem executar testes
     - mvn clean package -DskipTests
 
   artifacts:
@@ -77,32 +74,28 @@ docker_push:
   services:
     - docker:dind
 
-  # NOTE: usamos uma única string multilinha (|) para garantir que
-  # o GitLab interprete 'script' como uma string, evitando o erro.
   script: |
     #!/bin/sh
     set -e
 
     echo "Procurando o JAR em target/..."
-    JAR_FILE=$(ls target/*.jar 2>/dev/null | head -n 1 || true)
+    JAR_FILE=$(ls target/*.jar | head -n 1)
     if [ -z "$JAR_FILE" ]; then
       echo "ERRO: nenhum JAR encontrado em target/. Certifique-se de que o stage build/package gerou o artefato."
       exit 1
     fi
     echo "JAR encontrado: $JAR_FILE"
 
-    # Extrai a versão do nome do JAR (ajuste se seu padrão for diferente).
-    # Exemplo de nome: meuapp-1.0.123-9f8a7c.jar
+    # Extrai a versão do nome do JAR (última parte do nome)
     BASENAME=$(basename "$JAR_FILE" .jar)
-    # Tenta extrair a sequência após o último '-' como versão; ajuste conforme seu padrão.
     PROJECT_VERSION=$(echo "$BASENAME" | awk -F'-' '{print $NF}')
     if [ -z "$PROJECT_VERSION" ]; then
-      echo "Aviso: não foi possível extrair versão do nome do JAR. Usando 'latest' como versão provisória."
+      echo "Aviso: não foi possível extrair versão. Usando 'latest'."
       PROJECT_VERSION=latest
     fi
     echo "Versão extraída: $PROJECT_VERSION"
 
-    # Monta tag completa da imagem
+    # Verifica se DOCKER_IMAGE_NAME está definido
     if [ -z "$DOCKER_IMAGE_NAME" ]; then
       echo "ERRO: variável DOCKER_IMAGE_NAME não definida (Settings > CI/CD > Variables)."
       exit 1
@@ -110,21 +103,22 @@ docker_push:
     IMAGE_FULL_TAG="${DOCKER_IMAGE_NAME}:${PROJECT_VERSION}"
     echo "Tag final: $IMAGE_FULL_TAG"
 
-    # Login no Docker Registry (mais seguro usando password-stdin)
+    # Login no Docker Hub
     if [ -z "$DOCKER_USERNAME" ] || [ -z "$DOCKER_PASSWORD" ]; then
-      echo "ERRO: DOCKER_USERNAME ou DOCKER_PASSWORD não definidos nas variáveis de CI."
+      echo "ERRO: DOCKER_USERNAME ou DOCKER_PASSWORD não definidos."
       exit 1
     fi
     echo "$DOCKER_PASSWORD" | docker login -u "$DOCKER_USERNAME" --password-stdin
 
-    # Build e push
+    # Build da imagem Docker usando ARG para o jar dinâmico
     echo "Construindo imagem Docker..."
-    docker build -t "$IMAGE_FULL_TAG" .
+    docker build --build-arg JAR_FILE="$JAR_FILE" -t "$IMAGE_FULL_TAG" .
 
+    # Push da imagem
     echo "Enviando imagem: $IMAGE_FULL_TAG"
     docker push "$IMAGE_FULL_TAG"
 
-    # Atualizar tag latest (opcional)
+    # Atualiza tag latest
     echo "Tagueando como latest e fazendo push..."
     docker tag "$IMAGE_FULL_TAG" "${DOCKER_IMAGE_NAME}:latest"
     docker push "${DOCKER_IMAGE_NAME}:latest"
