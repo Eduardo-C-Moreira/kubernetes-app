@@ -90,7 +90,7 @@ docker_push:
 
     # 3. Construir a imagem Docker
     # O seu Dockerfile deve estar na raiz do projeto.
-    - echo "Construindo imagem: $IMAGE_FULL_TAG"
+#    - echo "Construindo imagem: $IMAGE_FULL_TAG"
     - docker build -t $IMAGE_FULL_TAG .
 
     # 4. Enviar a imagem para o Docker Hub
