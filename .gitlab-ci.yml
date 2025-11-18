@@ -1,3 +1,5 @@
+image: maven:3.9.6-eclipse-temurin-17
+
 stages:
   - build
   - test
@@ -7,7 +9,7 @@ variables:
   MAVEN_OPTS: "-Dmaven.repo.local=.m2/repository"
 
 before_script:
-  - echo "Using Java 17"
+  - echo "Using Java:"
   - java -version
   - mvn -version
 
