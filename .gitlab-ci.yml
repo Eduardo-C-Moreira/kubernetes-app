@@ -1,9 +1,9 @@
 # ==========================================================
 #             CONFIGURAÇÃO GLOBAL DO PIPELINE
 # ==========================================================
-
-# A imagem global é usada SOMENTE quando um job NÃO define sua própria imagem.
-# Aqui usamos docker:latest apenas para o job de deploy.
+# A imagem global é usada apenas por jobs que NÃO definem
+# sua própria imagem. Mantemos 'docker:latest' para permitir
+# executar comandos docker (build/push) no job de deploy.
 image: docker:latest
 
 stages:
@@ -12,46 +12,49 @@ stages:
   - package
   - deploy
 
-
-# ==========================================================
-#   IMPORTANTE: NÃO USAR before_script GLOBAL COM JAVA !!
-# ==========================================================
-# Antes você tinha:
-#
-# before_script:
-#   - java -version
-#   - mvn -version
-#
-# Isso é um erro pois jobs usando "docker:latest" NÃO têm Java/Maven.
-# Agora cada job Maven terá seu próprio before_script.
-# ==========================================================
-
-
-
 # ==========================================================
 #                       STAGE: BUILD
 # ==========================================================
 build:
   stage: build
 
-  # Esta imagem TEM Java + Maven
+  # Esta imagem já inclui OpenJDK (Java) e Maven.
+  # Usamos a imagem oficial do Maven com Temurin JDK 17.
   image: maven:3.9.6-eclipse-temurin-17
 
+  # before_script: comandos executados antes do script principal.
+  # Útil para checar ambiente, configurar variáveis, instalar dependências, etc.
   before_script:
-    - echo "Java:"
-    - java -version
-    - mvn -version
+    - echo "Java:"                 # Apenas imprime um rótulo para leitura do log.
+    - java -version                # Exibe a versão do Java instalada na imagem.
+    # Se falhar aqui, a imagem não tem Java.
+    - mvn -version                 # Exibe a versão do Maven instalada na imagem.
+    # Confirma que temos Maven disponível.
 
+  # script: comandos que rodam para executar a lógica do job.
   script:
     - echo "Atualizando versão automaticamente..."
+    # mvn versions:set -DnewVersion=...
+    # -> Atualiza a versão do projeto no arquivo pom.xml.
+    #    -DnewVersion=1.0.$CI_PIPELINE_IID-$CI_COMMIT_SHORT_SHA
+    #    monta uma versão única usando:
+    #      CI_PIPELINE_IID: identificador numérico do pipeline
+    #      CI_COMMIT_SHORT_SHA: hash curto do commit atual
+    #    Ex.: 1.0.123-9f8a7c
     - mvn versions:set -DnewVersion=1.0.$CI_PIPELINE_IID-$CI_COMMIT_SHORT_SHA
+
+    # mvn clean package -DskipTests
+    # -> 'clean' remove builds prévios (pasta target)
+    # -> 'package' compila o projeto e empacota (gera o .jar)
+    # -> '-DskipTests' pula a execução de testes (aumenta velocidade; use com cuidado)
     - mvn clean package -DskipTests
 
   artifacts:
+    # Arquivos que serão salvos e disponibilizados para jobs posteriores (e para download).
+    # Aqui salvamos os JARs produzidos e o pom.xml atualizado (com a nova versão).
     paths:
       - target/*.jar
       - pom.xml
-
 
 
 # ==========================================================
@@ -67,8 +70,12 @@ test:
     - mvn -version
 
   script:
+    # mvn test
+    # -> Executa a suíte de testes configurada no projeto (unit tests, por ex).
+    #    É recomendado não pular essa etapa em pipelines que visam qualidade.
     - mvn test
 
+  # (Opcional) você pode adicionar artifacts, reports (e.g. cobertura) aqui.
 
 
 # ==========================================================
@@ -83,59 +90,68 @@ package:
     - mvn -version
 
   script:
+    # mvn help:evaluate -Dexpression=project.version -q -DforceStdout
+    # -> Recupera a versão final do projeto (a que está no pom.xml após versions:set).
+    #    -q (quiet) reduz saída; -DforceStdout força saída no stdout útil para captura.
     - echo "Versão final do build:"
     - mvn help:evaluate -Dexpression=project.version -q -DforceStdout
 
   artifacts:
-    paths:
-      - target/*.jar
-
+    # Mantemos o JAR como artefato para ser usado no deploy.
+    - target/*.jar
 
 
 # ==========================================================
-#                       STAGE: DEPLOY
+#                       STAGE: DEPLOY (DOCKER)
 # ==========================================================
 docker_push:
   stage: deploy
 
-  # ESSENCIAL: para poder usar docker build/push
+  # Usamos docker:latest para executar docker build/push.
   image: docker:latest
 
+  # Habilita Docker-in-Docker para permitir 'docker build' dentro do runner.
   services:
     - docker:dind
 
-  # ESTE JOB NÃO USA JAVA — NÃO COLOCAR before_script AQUI!
+  # script: cada linha deve ser uma string. Não podem existir estruturas inválidas.
   script:
-    # 1. Obter versão do projeto
-    - export PROJECT_VERSION=$(mvn help:evaluate -Dexpression=project.version -q -DforceStdout)
+    # 1) Encontrar o JAR gerado no passo 'build'/'package'.
+    #    'ls target/*.jar | head -n 1' pega o primeiro .jar encontrado.
+    - export JAR_FILE=$(ls target/*.jar | head -n 1)
+    - echo "JAR encontrado: $JAR_FILE"
 
-    # 2. Construir nome completo da imagem
-    - export IMAGE_FULL_TAG=$DOCKER_IMAGE_NAME:$PROJECT_VERSION
+    # 2) Extrair a versão a partir do nome do JAR (se o nome do jar contiver a versão).
+    #    A expressão abaixo tenta pegar a parte final antes da extensão .jar.
+    #    Ajuste o sed/regex se seu naming for diferente.
+    - export PROJECT_VERSION=$(basename "$JAR_FILE" .jar | sed -E 's/.*-([0-9][^-]*)$/\1/')
+    - echo "Versão extraída: $PROJECT_VERSION"
 
-    # 3. Login no Docker Hub
+    # 3) Montar nome completo da imagem
+    #    DOCKER_IMAGE_NAME deve ser definido nas variáveis de CI (Settings > CI/CD > Variables)
+    - export IMAGE_FULL_TAG="$DOCKER_IMAGE_NAME:$PROJECT_VERSION"
+    - echo "Tag da imagem: $IMAGE_FULL_TAG"
+
+    # 4) Login no Docker Hub (variáveis DOCKER_USERNAME e DOCKER_PASSWORD precisam existir)
     - echo "Fazendo login no Docker Hub..."
     - docker login -u "$DOCKER_USERNAME" -p "$DOCKER_PASSWORD"
 
-    # 4. Construir imagem Docker
-    - echo "Construindo imagem: $IMAGE_FULL_TAG"
-    - docker build -t $IMAGE_FULL_TAG .
+    # 5) Build da imagem Docker
+    #    Certifique-se de ter um Dockerfile na raiz do repositório.
+    - echo "Construindo imagem Docker..."
+    - docker build -t "$IMAGE_FULL_TAG" .
 
-    # 5. Push da imagem com versão
-    - echo "Enviando imagem para o Docker Hub..."
-    - docker push $IMAGE_FULL_TAG
+    # 6) Push da imagem com a tag de versão
+    - echo "Enviando imagem: $IMAGE_FULL_TAG"
+    - docker push "$IMAGE_FULL_TAG"
 
-    # 6. Push da tag latest (opcional)
-    - docker tag $IMAGE_FULL_TAG $DOCKER_IMAGE_NAME:latest
-    - docker push $DOCKER_IMAGE_NAME:latest
+    # 7) Tag 'latest' e push (opcional)
+    - docker tag "$IMAGE_FULL_TAG" "$DOCKER_IMAGE_NAME:latest"
+    - docker push "$DOCKER_IMAGE_NAME:latest"
 
   needs:
     - package
 
   rules:
-    # Só roda no branch master
+    # Só executar esse job quando o branch for 'master' (ou ajuste para 'main').
     - if: $CI_COMMIT_BRANCH == "master"
-
-
-# ==========================================================
-# FIM DO ARQUIVO
-# ==========================================================
