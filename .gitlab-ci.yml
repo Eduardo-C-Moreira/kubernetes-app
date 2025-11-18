@@ -1,23 +1,36 @@
-# Define o nome do pipeline
 stages:
   - build
   - test
+  - package
 
-# Job de build
-build-job:
+variables:
+  MAVEN_OPTS: "-Dmaven.repo.local=.m2/repository"
+
+before_script:
+  - echo "Using Java 17"
+  - java -version
+  - mvn -version
+
+build:
   stage: build
-  image: maven:3.9.0-eclipse-temurin-17  # imagem com Maven e JDK 17
   script:
-    - mvn clean package -DskipTests  # build da aplicação, sem rodar testes
+    # Incrementa versão com o número do pipeline
+    - mvn versions:set -DnewVersion=1.0.$CI_PIPELINE_IID-$CI_COMMIT_SHORT_SHA
+    # Compila o projeto
+    - mvn clean package -DskipTests
   artifacts:
     paths:
-      - target/*.jar  # mantém o JAR gerado para usar em outros jobs, se quiser
+      - target/*.jar
 
-# Job de testes
-test-job:
+test:
   stage: test
-  image: maven:3.9.0-eclipse-temurin-17
   script:
-    - mvn test  # executa os testes automatizados
-  dependencies:
-    - build-job  # garante que o build já foi feito antes de rodar os testes
+    - mvn test
+
+package:
+  stage: package
+  script:
+    - echo "Versão final do build: $(mvn help:evaluate -Dexpression=project.version -q -DforceStdout)"
+    # Aqui você poderia construir a imagem Docker com tag única
+    - docker build -t myregistry/myapp:1.0.$CI_PIPELINE_IID-$CI_COMMIT_SHORT_SHA .
+    - docker push myregistry/myapp:1.0.$CI_PIPELINE_IID-$CI_COMMIT_SHORT_SHA
