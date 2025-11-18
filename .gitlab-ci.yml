@@ -1,26 +1,28 @@
-image: maven:3.9.6-eclipse-temurin-17
-
 stages:
   - build
   - test
   - package
 
+image: maven:3.9.6-eclipse-temurin-17
+
 variables:
   MAVEN_OPTS: "-Dmaven.repo.local=.m2/repository"
 
 before_script:
-  - echo "Using Java:"
+  - echo "Java:"
   - java -version
   - mvn -version
 
 build:
   stage: build
   script:
+    - echo "Atualizando versão automaticamente..."
     - mvn versions:set -DnewVersion=1.0.$CI_PIPELINE_IID-$CI_COMMIT_SHORT_SHA
     - mvn clean package -DskipTests
   artifacts:
     paths:
       - target/*.jar
+      - pom.xml
 
 test:
   stage: test
@@ -32,3 +34,6 @@ package:
   script:
     - echo "Versão final do build:"
     - mvn help:evaluate -Dexpression=project.version -q -DforceStdout
+  artifacts:
+    paths:
+      - target/*.jar
